@@ -1,16 +1,27 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useSelection } from "@/lib/selection";
-import { getBank } from "@/lib/data";
 import { assemble } from "@/lib/layout/assemble";
 import PaperView from "@/components/PaperView";
+import type { QuestionBank } from "@/lib/types";
 
 export default function GeneratePage() {
   const { ids, remove, move, clear } = useSelection();
-  const bank = useMemo(() => getBank(), []);
-  const questionMap = useMemo(() => new Map(bank.questions.map((q) => [q.id, q])), [bank]);
+  const [bank, setBank] = useState<QuestionBank | null>(null);
+
+  useEffect(() => {
+    fetch("/api/bank")
+      .then((res) => res.json())
+      .then(setBank)
+      .catch(() => setBank({ generatedAt: "", passages: [], questions: [] }));
+  }, []);
+
+  const questionMap = useMemo(
+    () => new Map((bank?.questions ?? []).map((q) => [q.id, q])),
+    [bank]
+  );
 
   const [title, setTitle] = useState("독서 고난도 모음");
   const [subtitle, setSubtitle] = useState("평가원 기출 재구성");
@@ -18,13 +29,19 @@ export default function GeneratePage() {
 
   const paper = useMemo(
     () =>
-      assemble(bank, {
-        title,
-        subtitle,
-        items: ids.map((questionId) => ({ questionId })),
-      }),
+      bank
+        ? assemble(bank, {
+            title,
+            subtitle,
+            items: ids.map((questionId) => ({ questionId })),
+          })
+        : null,
     [bank, ids, title, subtitle]
   );
+
+  if (!bank) {
+    return <div className="text-center py-16 text-gray-400">불러오는 중…</div>;
+  }
 
   if (ids.length === 0) {
     return (
@@ -115,7 +132,7 @@ export default function GeneratePage() {
         </div>
       </div>
 
-      {showPreview && <PaperView paper={paper} />}
+      {showPreview && paper && <PaperView paper={paper} />}
     </div>
   );
 }

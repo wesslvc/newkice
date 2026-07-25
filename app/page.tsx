@@ -1,9 +1,9 @@
 import Link from "next/link";
-import { getBank, isSampleData } from "@/lib/data";
+import { getBank, isSampleBank } from "@/lib/data";
 
-export default function HomePage() {
-  const bank = getBank();
-  const sample = isSampleData();
+export default async function HomePage() {
+  const bank = await getBank();
+  const sample = isSampleBank(bank);
 
   return (
     <div className="max-w-2xl mx-auto text-center py-16">
