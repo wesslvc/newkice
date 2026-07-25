@@ -14,13 +14,13 @@ function QuestionBlock({ q }: { q: AssembledQuestion }) {
     const regionWidth = q.region!.bbox.x1 - q.region!.bbox.x0;
     const maskPercent = q.numberMaskWidth ? Math.min(40, (q.numberMaskWidth / regionWidth) * 100) : 0;
     return (
-      <div className="question-block mb-4 relative">
+      <div className="question-block mb-6 relative">
         {maskPercent > 0 && (
           <div
             className="absolute top-0 left-0 bg-white flex items-start justify-start pl-0.5"
-            style={{ width: `${maskPercent}%`, height: "1.7em" }}
+            style={{ width: `${maskPercent}%`, height: "1.5em" }}
           >
-            <span className="font-semibold text-[14px]">{q.displayNo}.</span>
+            <span className="font-semibold text-[15px]">{q.displayNo}.</span>
           </div>
         )}
         {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -31,11 +31,11 @@ function QuestionBlock({ q }: { q: AssembledQuestion }) {
 
   // Text fallback — used until the original-image crop has been uploaded.
   return (
-    <div className="question-block mb-5">
-      <p className="font-semibold text-[14px] mb-2">
+    <div className="question-block mb-6">
+      <p className="font-semibold text-[15px] mb-2">
         {q.displayNo}. {q.stem}
       </p>
-      <ol className="text-[13px] space-y-1">
+      <ol className="text-[14px] space-y-1">
         {q.choices.map((c) => (
           <li key={c.no} className="flex gap-1.5">
             <span>{CIRCLED[c.no - 1]}</span>
@@ -50,47 +50,52 @@ function QuestionBlock({ q }: { q: AssembledQuestion }) {
 export default function PaperView({ paper }: { paper: AssembledPaper }) {
   return (
     <div id="paper-print">
-      <section className="paper-page px-10 py-12 print:p-[15mm] max-w-[297mm] mx-auto">
-        <header className="text-center mb-8 border-b-4 border-black pb-4">
-          {paper.subtitle && (
-            <p className="text-sm tracking-widest text-gray-500">{paper.subtitle}</p>
-          )}
-          <h1 className="text-2xl font-bold mt-2">{paper.title}</h1>
-        </header>
+      {paper.passages.map((passage, i) => {
+        const passageImageUrl = passage.region?.imageUrl;
+        return (
+          <div key={passage.id}>
+            {/* 홀수 페이지: 지문 전체 */}
+            <section className="paper-page spread-page px-12 py-14 print:p-[15mm] max-w-[210mm] mx-auto">
+              <p className="no-print text-xs text-gray-400 mb-3 border-b border-dashed border-gray-300 pb-2">
+                {i * 2 + 1}쪽 · 지문
+              </p>
+              {i === 0 && (
+                <header className="text-center mb-8 border-b-4 border-black pb-4">
+                  {paper.subtitle && (
+                    <p className="text-sm tracking-widest text-gray-500">{paper.subtitle}</p>
+                  )}
+                  <h1 className="text-2xl font-bold mt-2">{paper.title}</h1>
+                </header>
+              )}
+              {passage.source.label && (
+                <p className="text-[11px] text-gray-400 mb-2">{passage.source.label}</p>
+              )}
+              {passageImageUrl ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={passageImageUrl} alt={passage.title ?? "지문"} className="w-full" />
+              ) : passage.paragraphs.length > 0 ? (
+                <div className="text-[14px] leading-8 border border-gray-300 rounded p-6 bg-gray-50">
+                  {passage.paragraphs.map((p, pi) => (
+                    <p key={pi} className="mb-3 last:mb-0 indent-2">
+                      {p}
+                    </p>
+                  ))}
+                </div>
+              ) : null}
+            </section>
 
-        {paper.passages.map((passage) => {
-          const passageImageUrl = passage.region?.imageUrl;
-          return (
-            <div key={passage.id} className="passage-row grid grid-cols-2 gap-8 mb-10 items-start">
-              {/* 좌단: 지문 */}
-              <div className="passage-block">
-                {passage.source.label && (
-                  <p className="text-[11px] text-gray-400 mb-1">{passage.source.label}</p>
-                )}
-                {passageImageUrl ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img src={passageImageUrl} alt={passage.title ?? "지문"} className="w-full" />
-                ) : passage.paragraphs.length > 0 ? (
-                  <div className="text-[13px] leading-7 border border-gray-300 rounded p-4 bg-gray-50">
-                    {passage.paragraphs.map((p, i) => (
-                      <p key={i} className="mb-3 last:mb-0 indent-2">
-                        {p}
-                      </p>
-                    ))}
-                  </div>
-                ) : null}
-              </div>
-
-              {/* 우단: 문제 */}
-              <div className="questions-block">
-                {passage.questions.map((q) => (
-                  <QuestionBlock key={q.id} q={q} />
-                ))}
-              </div>
-            </div>
-          );
-        })}
-      </section>
+            {/* 짝수 페이지: 문제 전체 */}
+            <section className="paper-page spread-page px-12 py-14 print:p-[15mm] max-w-[210mm] mx-auto">
+              <p className="no-print text-xs text-gray-400 mb-3 border-b border-dashed border-gray-300 pb-2">
+                {i * 2 + 2}쪽 · 문제
+              </p>
+              {passage.questions.map((q) => (
+                <QuestionBlock key={q.id} q={q} />
+              ))}
+            </section>
+          </div>
+        );
+      })}
 
       <section className="paper-page answer-page px-10 py-12 print:p-[15mm] max-w-[210mm] mx-auto">
         <h2 className="text-xl font-bold mb-6 text-center">정답표</h2>

@@ -13,14 +13,12 @@
   @apply bg-white shadow-sm rounded-lg mb-8;
 }
 
-.paper-columns {
-  column-count: 2;
-  column-gap: 2.5rem;
-}
-
-.passage-block,
 .question-block {
   break-inside: avoid;
+}
+
+.spread-page {
+  min-height: 280mm;
 }
 
 @media print {
@@ -35,6 +33,8 @@
     border-radius: 0;
     margin: 0;
   }
+  /* 홀수 페이지(지문)·짝수 페이지(문제)·정답표 모두 각자 새 페이지에서 시작 */
+  .spread-page,
   .answer-page {
     break-before: page;
   }
