@@ -13,13 +13,14 @@ const BANK_URL =
 
 export async function getBank(): Promise<QuestionBank> {
   try {
-    // bank.json is well over Next's 2MB fetch-cache limit, so `next.revalidate`
-    // never actually caches it — every call already re-fetches from GitHub raw.
-    // (A module-level `cached` variable here previously locked in whatever the
-    // first fetch on a warm serverless instance returned, for that instance's
-    // entire lifetime — including a stale result if it raced GitHub raw's own
-    // 5-minute CDN cache right after a push. Don't reintroduce that.)
-    const res = await fetch(BANK_URL, { next: { revalidate: 3600 } });
+    // bank.json is well over Next's 2MB fetch-cache limit, so a per-instance
+    // "can't cache" warning fires and you'd expect every call to hit the
+    // network — but Vercel's Data Cache is a durable, cross-deployment store,
+    // and in practice a stale entry (e.g. one that raced GitHub raw's own
+    // 5-minute CDN cache right after a push) kept getting served well past
+    // revalidate's window on every later deployment. `cache: "no-store"`
+    // forces an uncached fetch on every call instead of trusting revalidate.
+    const res = await fetch(BANK_URL, { cache: "no-store" });
     if (res.ok) {
       const data = (await res.json()) as QuestionBank;
       if (data.passages?.length > 0) {
