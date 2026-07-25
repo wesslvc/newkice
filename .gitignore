@@ -4,3 +4,9 @@ node_modules
 *.tsbuildinfo
 next-env.d.ts
 .DS_Store
+
+# Raw source PDFs used for ingestion — copyrighted exam papers, not for
+# distribution. Only the extracted/structured data/bank.json is committed.
+samples/raw/
+samples/drive-files.json
+ingest-debug.txt

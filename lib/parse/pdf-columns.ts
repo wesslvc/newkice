@@ -19,6 +19,36 @@ interface PositionedItem {
   width: number;
 }
 
+/**
+ * Finds the x-coordinate of the column gutter by locating the widest gap
+ * between consecutive item left-edges within the middle portion of the page.
+ * Using item *widths* to detect a "straddling" item (the previous approach)
+ * is unreliable — pdf.js often returns multi-character/word runs as a single
+ * item, so a normal line of text can easily have an item wide enough to
+ * trip a width-based check. A gap in start-x positions is a much more
+ * direct signal of an actual empty gutter.
+ */
+function findColumnGutter(items: PositionedItem[], pageWidth: number): number | null {
+  const centerLo = pageWidth * 0.3;
+  const centerHi = pageWidth * 0.7;
+  const xs = items.map((i) => i.x).sort((a, b) => a - b);
+
+  let bestGap = 0;
+  let bestMid: number | null = null;
+  for (let i = 1; i < xs.length; i++) {
+    const gap = xs[i] - xs[i - 1];
+    const mid = (xs[i] + xs[i - 1]) / 2;
+    if (mid >= centerLo && mid <= centerHi && gap > bestGap) {
+      bestGap = gap;
+      bestMid = mid;
+    }
+  }
+
+  // Require a real empty band, not just consecutive characters with normal
+  // letter-spacing, before committing to a two-column split.
+  return bestGap > pageWidth * 0.015 ? bestMid : null;
+}
+
 function groupIntoLines(items: PositionedItem[], yTolerance = 3): string[] {
   const sorted = [...items].sort((a, b) => b.y - a.y || a.x - b.x);
   const lines: { y: number; items: PositionedItem[] }[] = [];
@@ -63,23 +93,15 @@ export async function extractReflowedPages(filePath: string): Promise<ReflowedPa
     }
 
     const pageWidth = viewport.width;
-    const mid = pageWidth / 2;
-    const gutterBand = pageWidth * 0.06;
+    const gutter = findColumnGutter(items, pageWidth);
 
-    const leftItems = items.filter((i) => i.x < mid);
-    const rightItems = items.filter((i) => i.x >= mid);
-
-    // Only treat the page as two columns if both halves have real content
-    // AND nothing straddles the center gutter (which would mean it's
-    // actually a single wide column, e.g. a cover or answer-key page).
-    const hasGutter =
-      leftItems.length > 5 &&
-      rightItems.length > 5 &&
-      !items.some((i) => i.x < mid + gutterBand / 2 && i.x + i.width > mid - gutterBand / 2 && i.width > gutterBand);
-
-    const text = hasGutter
-      ? [...groupIntoLines(leftItems), ...groupIntoLines(rightItems)].join("\n")
-      : groupIntoLines(items).join("\n");
+    const text =
+      gutter !== null
+        ? [
+            ...groupIntoLines(items.filter((i) => i.x < gutter)),
+            ...groupIntoLines(items.filter((i) => i.x >= gutter)),
+          ].join("\n")
+        : groupIntoLines(items).join("\n");
 
     pages.push({ pageNumber: pageNum, text });
   }

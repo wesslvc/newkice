@@ -13,14 +13,29 @@ const CIRCLED = ["①", "②", "③", "④", "⑤"] as const;
 const YEAR_EXAM_RE =
   /(\d{4})\s*학년도\s*(대학수학능력시험|(?:6|9)\s*월\s*모의평가|(?:\d{1,2})\s*월\s*학력평가|학력평가)/;
 
-const RANGE_RE = /\[\s*(\d{1,2})\s*[~∼\-]\s*(\d{1,2})\s*\]/;
+const RANGE_RE = /[\[［]\s*(\d{1,2})\s*[~∼～\-]\s*(\d{1,2})\s*[\]］]/;
 
 const QUESTION_START_RE = /^(\d{1,2})\s*\.\s*(.+)$/;
+
+// 통합 국어 시험지의 선택과목 구간은 본문에 "(화법과 작문)" / "(언어와 매체)" 같은
+// 괄호 표기 소제목으로 명시된다. 독서·문학은 공통 과목이라 이런 라벨이 없는 경우가
+// 많아 defaultCategory로만 구분한다 — 실제 파일로 더 검증이 필요한 부분.
+const CATEGORY_RE = /^[\(（]\s*(화법과\s*작문|언어와\s*매체|독서|문학|화법과\s*언어)\s*[\)）]$/;
 
 function normalizeExamName(raw: string): ExamName {
   if (raw.includes("수능") || raw.includes("대학수학능력시험")) return "대학수학능력시험";
   if (raw.includes("월") && raw.includes("모의평가")) return raw.trim() as ExamName;
   if (raw.includes("학력평가")) return "학력평가";
+  return "기타";
+}
+
+function normalizeCategory(raw: string): Category {
+  const clean = raw.replace(/\s+/g, "");
+  if (clean === "화법과작문") return "화법과작문";
+  if (clean === "언어와매체") return "언어와매체";
+  if (clean === "화법과언어") return "화법과언어";
+  if (clean === "독서") return "독서";
+  if (clean === "문학") return "문학";
   return "기타";
 }
 
@@ -42,6 +57,19 @@ let idCounter = 0;
 function nextId(prefix: string): string {
   idCounter += 1;
   return `${prefix}-${Date.now().toString(36)}-${idCounter.toString(36)}`;
+}
+
+/** See flushQuestion(): recovers choices printed as "…text…①" (trailing marker). */
+function extractTrailingChoices(stem: string): { stem: string; choices: import("@/lib/types").Choice[] } | null {
+  const matches = [...stem.matchAll(/([\s\S]*?)([①②③④⑤])/g)];
+  if (matches.length < 5) return null;
+  const last5 = matches.slice(-5);
+  const expected: (typeof CIRCLED)[number][] = ["①", "②", "③", "④", "⑤"];
+  if (!last5.every((m, i) => m[2] === expected[i])) return null;
+
+  const choices = last5.map((m, i) => ({ no: (i + 1) as 1 | 2 | 3 | 4 | 5, text: m[1].trim() }));
+  const headEnd = last5[0].index ?? 0;
+  return { stem: stem.slice(0, headEnd).trim(), choices };
 }
 
 export function segment(fullText: string, opts: SegmentOptions): SegmentResult {
@@ -67,6 +95,16 @@ export function segment(fullText: string, opts: SegmentOptions): SegmentResult {
   let mode: "scan" | "passage-body" | "question-stem" | "choices" = "scan";
 
   const flushQuestion = () => {
+    if (currentQuestion && currentQuestion.choices.length === 0) {
+      // Some question types (e.g. 화법과 작문 목록형 문항) print each choice
+      // as "…설명 텍스트…①" with the circled digit trailing the option's
+      // own text rather than leading it. Retry as a fallback before giving up.
+      const fallback = extractTrailingChoices(currentQuestion.stem);
+      if (fallback) {
+        currentQuestion.stem = fallback.stem;
+        currentQuestion.choices = fallback.choices;
+      }
+    }
     if (currentQuestion && currentQuestion.choices.length > 0) {
       questions.push(currentQuestion);
     } else if (currentQuestion) {
@@ -95,6 +133,12 @@ export function segment(fullText: string, opts: SegmentOptions): SegmentResult {
         label: line,
       };
       mode = "scan";
+      continue;
+    }
+
+    const categoryMatch = line.match(CATEGORY_RE);
+    if (categoryMatch) {
+      currentSource = { ...currentSource, category: normalizeCategory(categoryMatch[1]) };
       continue;
     }
 
@@ -148,6 +192,14 @@ export function segment(fullText: string, opts: SegmentOptions): SegmentResult {
         }
       }
       mode = "choices";
+      continue;
+    }
+
+    // Page-footer noise (bare page numbers, e.g. "1 11" or "20") that ends
+    // up on its own line after column reflow. Drop it rather than glue it
+    // onto whatever text happens to be accumulating.
+    if (/^[\d\s]{1,6}$/.test(line)) {
+      unmatched.push(line);
       continue;
     }
 
