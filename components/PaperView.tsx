@@ -1,4 +1,5 @@
 import type { AssembledPaper, AssembledQuestion } from "@/lib/types";
+import type { ReactNode } from "react";
 
 const CIRCLED = ["①", "②", "③", "④", "⑤"];
 
@@ -6,6 +7,25 @@ function chunk<T>(arr: T[], size: number): T[][] {
   const out: T[][] = [];
   for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
   return out;
+}
+
+/**
+ * A4 canvas with a permanent left/right divider — 평가원 문제지는 항상 2단
+ * 구성이므로, 이 페이지에서 실제로 쓰는 쪽이 한쪽뿐이더라도 구분선은 항상
+ * 보여준다(오른쪽이 비어 있어도).
+ */
+function A4Page({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <section className="paper-page spread-page print:p-[15mm] mx-auto">
+      <p className="no-print text-xs text-gray-400 mb-3 border-b border-dashed border-gray-300 pb-2">
+        {label}
+      </p>
+      <div className="a4-columns grid grid-cols-2 h-full">
+        <div className="pr-6 border-r border-gray-300 overflow-hidden">{children}</div>
+        <div className="pl-6" />
+      </div>
+    </section>
+  );
 }
 
 function QuestionBlock({ q }: { q: AssembledQuestion }) {
@@ -54,11 +74,8 @@ export default function PaperView({ paper }: { paper: AssembledPaper }) {
         const passageImageUrl = passage.region?.imageUrl;
         return (
           <div key={passage.id}>
-            {/* 홀수 페이지: 지문 전체 */}
-            <section className="paper-page spread-page px-12 py-14 print:p-[15mm] max-w-[210mm] mx-auto">
-              <p className="no-print text-xs text-gray-400 mb-3 border-b border-dashed border-gray-300 pb-2">
-                {i * 2 + 1}쪽 · 지문
-              </p>
+            {/* 홀수 페이지: 지문 (좌단), 우단은 항상 비워 둠 */}
+            <A4Page label={`${i * 2 + 1}쪽 · 지문`}>
               {i === 0 && (
                 <header className="text-center mb-8 border-b-4 border-black pb-4">
                   {paper.subtitle && (
@@ -82,17 +99,14 @@ export default function PaperView({ paper }: { paper: AssembledPaper }) {
                   ))}
                 </div>
               ) : null}
-            </section>
+            </A4Page>
 
-            {/* 짝수 페이지: 문제 전체 */}
-            <section className="paper-page spread-page px-12 py-14 print:p-[15mm] max-w-[210mm] mx-auto">
-              <p className="no-print text-xs text-gray-400 mb-3 border-b border-dashed border-gray-300 pb-2">
-                {i * 2 + 2}쪽 · 문제
-              </p>
+            {/* 짝수 페이지: 문제 (좌단), 우단은 항상 비워 둠 */}
+            <A4Page label={`${i * 2 + 2}쪽 · 문제`}>
               {passage.questions.map((q) => (
                 <QuestionBlock key={q.id} q={q} />
               ))}
-            </section>
+            </A4Page>
           </div>
         );
       })}

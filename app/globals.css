@@ -17,8 +17,16 @@
   break-inside: avoid;
 }
 
+/* A4 = 210mm x 297mm, 고정 크기 — 내용과 무관하게 페이지 캔버스 자체는 항상 이 크기 */
 .spread-page {
-  min-height: 280mm;
+  width: 210mm;
+  height: 297mm;
+  padding: 15mm;
+  box-sizing: border-box;
+}
+
+.a4-columns {
+  min-height: 0;
 }
 
 @media print {
@@ -32,6 +40,9 @@
     box-shadow: none;
     border-radius: 0;
     margin: 0;
+  }
+  .spread-page {
+    padding: 0;
   }
   /* 홀수 페이지(지문)·짝수 페이지(문제)·정답표 모두 각자 새 페이지에서 시작 */
   .spread-page,
