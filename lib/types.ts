@@ -40,6 +40,15 @@ export interface Choice {
   text: string;
 }
 
+/** Where a region was cropped from in the source PDF — lets the generator re-crop from the original page image instead of re-typesetting text. */
+export interface ImageRegion {
+  pageNumber: number;
+  /** PDF point-space bounding box, origin bottom-left, y increasing upward. */
+  bbox: { x0: number; x1: number; y0: number; y1: number };
+  /** Public URL (e.g. Vercel Blob) of the cropped image, once uploaded. */
+  imageUrl?: string;
+}
+
 export interface Question {
   id: string;
   /** id of the Passage this question is attached to, or null for a standalone item (e.g. 화법과작문). */
@@ -52,6 +61,15 @@ export interface Question {
   points?: number;
   difficulty?: "상" | "중" | "하";
   tags?: string[];
+  /** Crop region for the original-image rendering of this question (stem + choices, including the original number label). */
+  region?: ImageRegion;
+  /**
+   * Width (in PDF points, from the region's left edge) of the original
+   * "12." number label at the start of the first line — wide enough for
+   * the generator to paint over it and draw a freshly assigned number on
+   * top, without needing to re-typeset the whole question.
+   */
+  numberMaskWidth?: number;
 }
 
 export interface Passage {
@@ -65,6 +83,8 @@ export interface Passage {
   /** Reference back to the source file this was ingested from, if known. */
   sourceFileId?: string;
   sourceFileName?: string;
+  /** Crop region for the original-image rendering of this passage. */
+  region?: ImageRegion;
 }
 
 export interface QuestionBank {

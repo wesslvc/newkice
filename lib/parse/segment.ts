@@ -1,12 +1,13 @@
-import type { Category, ExamName, ExamSource, Passage, Question, Subject } from "@/lib/types";
+import type { Category, ExamName, ExamSource, ImageRegion, Passage, Question, Subject } from "@/lib/types";
+import type { PositionedLine } from "@/lib/parse/pdf-columns";
 
 // Heuristic text segmenter for 평가원 기출/모의고사 compilation PDFs.
 //
-// pdf-parse gives back linear text, so a 2-column layout (typical of these
-// papers) interleaves left/right column lines. This parser assumes the
-// input has already been reflowed into reading order — see README-INGEST.md
-// for how to pre-process a real source file, since that step is
-// PDF-specific and needs to be tuned against real extracted text.
+// Operates on PositionedLine[] (see pdf-columns.ts) rather than plain text:
+// each line carries its PDF-space bounding box, so as passages/questions are
+// assembled we also union those boxes into a crop region (ImageRegion) —
+// letting the generator show the *original* page image instead of
+// re-typeset text.
 
 const CIRCLED = ["①", "②", "③", "④", "⑤"] as const;
 
@@ -59,6 +60,23 @@ function nextId(prefix: string): string {
   return `${prefix}-${Date.now().toString(36)}-${idCounter.toString(36)}`;
 }
 
+function unionRegion(region: ImageRegion | undefined, line: PositionedLine): ImageRegion {
+  if (!region || region.pageNumber !== line.pageNumber) {
+    // Passage/question crossing a page break: keep the first page's box
+    // rather than corrupting it with coordinates from a different page.
+    return region ?? { pageNumber: line.pageNumber, bbox: { ...line.bbox } };
+  }
+  return {
+    pageNumber: region.pageNumber,
+    bbox: {
+      x0: Math.min(region.bbox.x0, line.bbox.x0),
+      x1: Math.max(region.bbox.x1, line.bbox.x1),
+      y0: Math.min(region.bbox.y0, line.bbox.y0),
+      y1: Math.max(region.bbox.y1, line.bbox.y1),
+    },
+  };
+}
+
 /** See flushQuestion(): recovers choices printed as "…text…①" (trailing marker). */
 function extractTrailingChoices(stem: string): { stem: string; choices: import("@/lib/types").Choice[] } | null {
   const matches = [...stem.matchAll(/([\s\S]*?)([①②③④⑤])/g)];
@@ -72,11 +90,8 @@ function extractTrailingChoices(stem: string): { stem: string; choices: import("
   return { stem: stem.slice(0, headEnd).trim(), choices };
 }
 
-export function segment(fullText: string, opts: SegmentOptions): SegmentResult {
-  const lines = fullText
-    .split(/\r?\n/)
-    .map((l) => l.trim())
-    .filter((l) => l.length > 0);
+export function segment(positionedLines: PositionedLine[], opts: SegmentOptions): SegmentResult {
+  const lines = positionedLines.filter((l) => l.text.trim().length > 0);
 
   const passages: Passage[] = [];
   const questions: Question[] = [];
@@ -122,7 +137,9 @@ export function segment(fullText: string, opts: SegmentOptions): SegmentResult {
   };
 
   for (const line of lines) {
-    const yearMatch = line.match(YEAR_EXAM_RE);
+    const text = line.text;
+
+    const yearMatch = text.match(YEAR_EXAM_RE);
     if (yearMatch) {
       flushPassage();
       currentSource = {
@@ -130,19 +147,19 @@ export function segment(fullText: string, opts: SegmentOptions): SegmentResult {
         examName: normalizeExamName(yearMatch[2]),
         subject: opts.defaultSubject,
         category: opts.defaultCategory,
-        label: line,
+        label: text,
       };
       mode = "scan";
       continue;
     }
 
-    const categoryMatch = line.match(CATEGORY_RE);
+    const categoryMatch = text.match(CATEGORY_RE);
     if (categoryMatch) {
       currentSource = { ...currentSource, category: normalizeCategory(categoryMatch[1]) };
       continue;
     }
 
-    const rangeMatch = line.match(RANGE_RE);
+    const rangeMatch = text.match(RANGE_RE);
     if (rangeMatch) {
       flushPassage();
       currentPassage = {
@@ -152,13 +169,14 @@ export function segment(fullText: string, opts: SegmentOptions): SegmentResult {
         questionRange: [Number(rangeMatch[1]), Number(rangeMatch[2])],
         sourceFileId: opts.sourceFileId,
         sourceFileName: opts.sourceFileName,
+        region: { pageNumber: line.pageNumber, bbox: { ...line.bbox } },
       };
       mode = "passage-body";
       continue;
     }
 
-    const questionMatch = line.match(QUESTION_START_RE);
-    const looksLikeChoiceLine = CIRCLED.some((c) => line.startsWith(c));
+    const questionMatch = text.match(QUESTION_START_RE);
+    const looksLikeChoiceLine = CIRCLED.some((c) => text.startsWith(c));
 
     if (questionMatch && !looksLikeChoiceLine) {
       const no = Number(questionMatch[1]);
@@ -174,6 +192,8 @@ export function segment(fullText: string, opts: SegmentOptions): SegmentResult {
           stem: questionMatch[2],
           choices: [],
           answer: 1, // placeholder — filled in by applyAnswerKey()
+          region: { pageNumber: line.pageNumber, bbox: { ...line.bbox } },
+          numberMaskWidth: line.contentX0 !== undefined ? line.contentX0 - line.bbox.x0 : undefined,
         };
         mode = "question-stem";
         continue;
@@ -182,15 +202,16 @@ export function segment(fullText: string, opts: SegmentOptions): SegmentResult {
 
     if (looksLikeChoiceLine && currentQuestion) {
       // A single extracted line can contain multiple circled choices; split on them.
-      const parts = line.split(/(?=[①②③④⑤])/).filter(Boolean);
+      const parts = text.split(/(?=[①②③④⑤])/).filter(Boolean);
       for (const part of parts) {
         const marker = part[0];
         const idx = CIRCLED.indexOf(marker as (typeof CIRCLED)[number]);
-        const text = part.slice(1).trim();
-        if (idx >= 0 && text) {
-          currentQuestion.choices.push({ no: (idx + 1) as 1 | 2 | 3 | 4 | 5, text });
+        const choiceText = part.slice(1).trim();
+        if (idx >= 0 && choiceText) {
+          currentQuestion.choices.push({ no: (idx + 1) as 1 | 2 | 3 | 4 | 5, text: choiceText });
         }
       }
+      currentQuestion.region = unionRegion(currentQuestion.region, line);
       mode = "choices";
       continue;
     }
@@ -198,28 +219,30 @@ export function segment(fullText: string, opts: SegmentOptions): SegmentResult {
     // Page-footer noise (bare page numbers, e.g. "1 11" or "20") that ends
     // up on its own line after column reflow. Drop it rather than glue it
     // onto whatever text happens to be accumulating.
-    if (/^[\d\s]{1,6}$/.test(line)) {
-      unmatched.push(line);
+    if (/^[\d\s]{1,6}$/.test(text)) {
+      unmatched.push(text);
       continue;
     }
 
     if (mode === "passage-body" && currentPassage) {
-      currentPassage.paragraphs.push(line);
+      currentPassage.paragraphs.push(text);
+      currentPassage.region = unionRegion(currentPassage.region, line);
       continue;
     }
 
     if ((mode === "question-stem" || mode === "choices") && currentQuestion) {
       if (currentQuestion.choices.length === 0) {
-        currentQuestion.stem += ` ${line}`;
+        currentQuestion.stem += ` ${text}`;
       } else {
         // Continuation of the previous choice's text (line-wrapped).
         const last = currentQuestion.choices[currentQuestion.choices.length - 1];
-        last.text += ` ${line}`;
+        last.text += ` ${text}`;
       }
+      currentQuestion.region = unionRegion(currentQuestion.region, line);
       continue;
     }
 
-    unmatched.push(line);
+    unmatched.push(text);
   }
 
   flushPassage();

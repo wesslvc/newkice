@@ -10,6 +10,7 @@
     "ingest": "tsx scripts/ingest.ts"
   },
   "dependencies": {
+    "@napi-rs/canvas": "^1.0.2",
     "clsx": "^2.1.1",
     "fuse.js": "^7.0.0",
     "next": "^16.2.9",

@@ -1,29 +1,30 @@
 #!/usr/bin/env tsx
 /**
  * Ingest a source PDF (a real 평가원 기출/모의고사 compilation) into the
- * structured question bank at data/bank.json.
+ * structured question bank at data/bank.json, and crop an original-page
+ * image for every passage and question into samples/crops/.
  *
  * Usage:
  *   npm run ingest -- <path-to-pdf> --subject 국어 --category 독서 \
- *     [--answers <path-to-answer-key.txt>] [--naive]
+ *     [--answers <path-to-answer-key.txt>] [--scale 3]
  *
  * --answers should point at a plain-text dump of the printed answer-key
  * table (e.g. "1 ② 2 ④ 3 ① ..."). Without it, questions are stored with a
  * placeholder answer and a warning — do not generate a paper from them
  * until verified.
  *
- * --naive skips the column-aware reflow (lib/parse/pdf-columns.ts) and uses
- * pdf-parse's default linear extraction instead. Useful as a fallback if the
- * column heuristic misfires on a given file.
+ * Image crops are saved locally (gitignored — see scripts/upload-images.ts
+ * for pushing them to Vercel Blob and filling in Question/Passage.region.imageUrl).
  */
 import fs from "fs";
 import path from "path";
 import { extractReflowedPages } from "../lib/parse/pdf-columns";
-import { extractPdfPages } from "../lib/parse/text";
 import { applyAnswerKey, parseAnswerKeyTable, segment } from "../lib/parse/segment";
+import { loadPdf, renderPageToImage, cropToPng } from "../lib/parse/pdf-images";
 import type { Category, QuestionBank, Subject } from "../lib/types";
 
 const BANK_PATH = path.join(process.cwd(), "data", "bank.json");
+const CROPS_DIR = path.join(process.cwd(), "samples", "crops");
 
 function parseArgs(argv: string[]) {
   const [file, ...rest] = argv;
@@ -48,20 +49,21 @@ async function main() {
   const { file, opts } = parseArgs(process.argv.slice(2));
   if (!file) {
     console.error(
-      "Usage: npm run ingest -- <path-to-pdf> --subject 국어 --category 독서 [--answers <file>] [--naive]"
+      "Usage: npm run ingest -- <path-to-pdf> --subject 국어 --category 독서 [--answers <file>] [--scale 3]"
     );
     process.exit(1);
   }
 
   const subject = (opts.subject as Subject) ?? "국어";
   const category = (opts.category as Category) ?? "기타";
+  const scale = opts.scale ? Number(opts.scale) : 3;
 
-  console.log(`Extracting text from ${file} (${opts.naive ? "naive" : "column-aware"} mode)...`);
-  const pages = opts.naive ? await extractPdfPages(file) : await extractReflowedPages(file);
-  const fullText = pages.map((p) => p.text).join("\n");
+  console.log(`Extracting text + coordinates from ${file}...`);
+  const pages = await extractReflowedPages(file);
+  const allLines = pages.flatMap((p) => p.lines);
 
-  console.log(`Segmenting ${pages.length} pages of extracted text...`);
-  const result = segment(fullText, {
+  console.log(`Segmenting ${pages.length} pages (${allLines.length} lines)...`);
+  const result = segment(allLines, {
     defaultSubject: subject,
     defaultCategory: category,
     sourceFileName: path.basename(file),
@@ -86,6 +88,42 @@ async function main() {
         "and must not be used in a generated paper until verified against the real answer key."
     );
   }
+
+  // --- Crop original-page images for every passage/question region ---
+  const stem = path.basename(file).replace(/\.pdf$/i, "");
+  const outDir = path.join(CROPS_DIR, stem);
+  fs.mkdirSync(path.join(outDir, "passages"), { recursive: true });
+  fs.mkdirSync(path.join(outDir, "questions"), { recursive: true });
+
+  console.log(`Rendering pages at ${scale}x for cropping...`);
+  const doc = await loadPdf(file);
+  const pageCache = new Map<number, Awaited<ReturnType<typeof renderPageToImage>>>();
+
+  async function getPage(pageNumber: number) {
+    let cached = pageCache.get(pageNumber);
+    if (!cached) {
+      cached = await renderPageToImage(doc, pageNumber, scale);
+      pageCache.set(pageNumber, cached);
+    }
+    return cached;
+  }
+
+  let cropped = 0;
+  for (const passage of result.passages) {
+    if (!passage.region) continue;
+    const p = await getPage(passage.region.pageNumber);
+    const png = cropToPng(p, passage.region.bbox, scale);
+    fs.writeFileSync(path.join(outDir, "passages", `${passage.id}.png`), png);
+    cropped++;
+  }
+  for (const question of result.questions) {
+    if (!question.region) continue;
+    const p = await getPage(question.region.pageNumber);
+    const png = cropToPng(p, question.region.bbox, scale);
+    fs.writeFileSync(path.join(outDir, "questions", `${question.id}.png`), png);
+    cropped++;
+  }
+  console.log(`Cropped ${cropped} images into ${outDir}`);
 
   let bank: QuestionBank = { generatedAt: new Date().toISOString(), passages: [], questions: [] };
   if (fs.existsSync(BANK_PATH)) {
