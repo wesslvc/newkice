@@ -51,37 +51,86 @@ interface PositionedItem {
 }
 
 /**
- * Finds the x-coordinate of the column gutter by locating the widest gap
- * between consecutive item left-edges within the middle portion of the page.
- * Using item *widths* to detect a "straddling" item (an earlier approach)
- * is unreliable — pdf.js often returns multi-character/word runs as a single
- * item, so a normal line of text can easily have an item wide enough to
- * trip a width-based check. A gap in start-x positions is a much more
- * direct signal of an actual empty gutter.
+ * Finds the x-coordinate of the column gutter.
+ *
+ * The first pass gathers every gap between consecutive item left-edges
+ * within the middle portion of the page as a *candidate* gutter — a gap in
+ * start-x positions is a decent signal, but on some pages (a sparse title
+ * page, a page with a full-width diagram/notice box) a coincidental gap
+ * unrelated to the real column boundary can be just as wide, or wider,
+ * than the true gutter, and picking the single widest one by a hair
+ * (sometimes <1pt) picks the wrong one.
+ *
+ * The second pass disambiguates between candidates by checking how well
+ * each is *confirmed* by the rest of the page: group items into text rows,
+ * then for each candidate band [lo, hi], count rows that have content on
+ * both sides of the band (confirming — this row really does span two
+ * columns with this gutter) versus rows where some item's rendered extent
+ * actually crosses into the band (violating — this can't be a real blank
+ * gutter here). The real column boundary is a vertical band that stays
+ * clear across most of the page, so it wins on confirming/violating even
+ * when its raw x0-to-x0 gap is narrower than a one-off coincidental gap.
  */
 function findColumnGutter(items: PositionedItem[], pageWidth: number): number | null {
   const centerLo = pageWidth * 0.3;
   const centerHi = pageWidth * 0.7;
   const xs = items.map((i) => i.x).sort((a, b) => a - b);
 
-  let bestGap = 0;
-  let bestMid: number | null = null;
+  const candidates: { gap: number; mid: number; lo: number; hi: number }[] = [];
   for (let i = 1; i < xs.length; i++) {
     const gap = xs[i] - xs[i - 1];
     const mid = (xs[i] + xs[i - 1]) / 2;
-    if (mid >= centerLo && mid <= centerHi && gap > bestGap) {
-      bestGap = gap;
-      bestMid = mid;
+    if (mid >= centerLo && mid <= centerHi && gap > pageWidth * 0.015) {
+      candidates.push({ gap, mid, lo: xs[i - 1], hi: xs[i] });
+    }
+  }
+  if (candidates.length === 0) return null;
+  if (candidates.length === 1) return candidates[0].mid;
+
+  const rows: { items: PositionedItem[] }[] = [];
+  for (const item of [...items].sort((a, b) => b.y - a.y)) {
+    const last = rows[rows.length - 1];
+    const lastY = last ? last.items[last.items.length - 1].y : null;
+    if (last && lastY !== null && Math.abs(lastY - item.y) <= 3) {
+      last.items.push(item);
+    } else {
+      rows.push({ items: [item] });
     }
   }
 
-  return bestGap > pageWidth * 0.015 ? bestMid : null;
+  function score(c: { lo: number; hi: number }): number {
+    let confirming = 0;
+    let violating = 0;
+    for (const row of rows) {
+      const crosses = row.items.some((it) => it.x < c.hi && it.x + it.width > c.lo);
+      if (crosses) {
+        violating++;
+        continue;
+      }
+      const rowMinX = Math.min(...row.items.map((it) => it.x));
+      const rowMaxX = Math.max(...row.items.map((it) => it.x + it.width));
+      if (rowMinX < c.lo && rowMaxX > c.hi) confirming++;
+    }
+    return confirming - violating * 5;
+  }
+
+  let best = candidates[0];
+  let bestScore = -Infinity;
+  for (const c of candidates) {
+    const s = score(c);
+    if (s > bestScore || (s === bestScore && c.gap > best.gap)) {
+      bestScore = s;
+      best = c;
+    }
+  }
+  return best.mid;
 }
 
 function groupIntoLines(
   items: PositionedItem[],
   pageNumber: number,
   column: "left" | "right" | "single",
+  gutter: number | null,
   yTolerance = 3
 ): PositionedLine[] {
   const sorted = [...items].sort((a, b) => b.y - a.y || a.x - b.x);
@@ -96,11 +145,20 @@ function groupIntoLines(
   }
   return lines.map((l) => {
     const ordered = l.items.slice().sort((a, b) => a.x - b.x);
-    const x0 = Math.min(...ordered.map((i) => i.x));
-    const x1 = Math.max(...ordered.map((i) => i.x + i.width));
+    let x0 = Math.min(...ordered.map((i) => i.x));
+    let x1 = Math.max(...ordered.map((i) => i.x + i.width));
     const y0 = Math.min(...ordered.map((i) => i.y));
     const y1 = Math.max(...ordered.map((i) => i.y + i.height));
     const text = ordered.map((i) => i.str).join("");
+
+    // A single text run can straddle the gutter (e.g. a full-width notice
+    // line printed across both columns) even though its start-x placed it
+    // in this bucket. Clamp the crop box to this column's own side so it
+    // never bleeds into the other column's content.
+    if (gutter !== null) {
+      if (column === "left") x1 = Math.min(x1, gutter);
+      else if (column === "right") x0 = Math.max(x0, gutter);
+    }
 
     // If this line opens with "12.", find the x-position right after that
     // prefix by walking items in reading order until enough characters have
@@ -165,10 +223,10 @@ export async function extractReflowedPages(filePath: string): Promise<ReflowedPa
     const lines =
       gutter !== null
         ? [
-            ...groupIntoLines(items.filter((i) => i.x < gutter), pageNum, "left"),
-            ...groupIntoLines(items.filter((i) => i.x >= gutter), pageNum, "right"),
+            ...groupIntoLines(items.filter((i) => i.x < gutter), pageNum, "left", gutter),
+            ...groupIntoLines(items.filter((i) => i.x >= gutter), pageNum, "right", gutter),
           ]
-        : groupIntoLines(items, pageNum, "single");
+        : groupIntoLines(items, pageNum, "single", null);
 
     pages.push({
       pageNumber: pageNum,
