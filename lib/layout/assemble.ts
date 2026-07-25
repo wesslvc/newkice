@@ -64,7 +64,7 @@ export function assemble(bank: QuestionBank, req: GenerationRequest): AssembledP
       paragraphs: passage?.paragraphs ?? [],
       sourceFileId: passage?.sourceFileId,
       sourceFileName: passage?.sourceFileName,
-      region: passage?.region,
+      regions: passage?.regions,
       questions: assembledQuestions,
     });
   }

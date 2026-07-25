@@ -21,7 +21,7 @@ import path from "path";
 import { extractReflowedPages } from "../lib/parse/pdf-columns";
 import { applyAnswerKey, parseAnswerKeyTable, segment } from "../lib/parse/segment";
 import { loadPdf, renderPageToImage, cropToPng } from "../lib/parse/pdf-images";
-import type { Category, QuestionBank, Subject } from "../lib/types";
+import type { Category, ImageRegion, QuestionBank, Subject } from "../lib/types";
 
 const BANK_PATH = path.join(process.cwd(), "data", "bank.json");
 const CROPS_DIR = path.join(process.cwd(), "samples", "crops");
@@ -108,22 +108,37 @@ async function main() {
     return cached;
   }
 
+  // A passage/question that spans a column or page boundary has more than
+  // one region — crop each separately (first one keeps the plain "<id>.png"
+  // name for backward compatibility, later ones get a "__N" suffix) so the
+  // generator can stack them in order instead of losing the overflow.
+  async function cropRegions(id: string, regions: ImageRegion[], dir: string) {
+    let n = 0;
+    for (const region of regions) {
+      const p = await getPage(region.pageNumber);
+      const png = cropToPng(p, region.bbox, scale);
+      const filename = n === 0 ? `${id}.png` : `${id}__${n}.png`;
+      fs.writeFileSync(path.join(dir, filename), png);
+      n++;
+    }
+    return n;
+  }
+
   let cropped = 0;
+  let multiRegionCount = 0;
   for (const passage of result.passages) {
-    if (!passage.region) continue;
-    const p = await getPage(passage.region.pageNumber);
-    const png = cropToPng(p, passage.region.bbox, scale);
-    fs.writeFileSync(path.join(outDir, "passages", `${passage.id}.png`), png);
-    cropped++;
+    if (!passage.regions || passage.regions.length === 0) continue;
+    if (passage.regions.length > 1) multiRegionCount++;
+    cropped += await cropRegions(passage.id, passage.regions, path.join(outDir, "passages"));
   }
   for (const question of result.questions) {
-    if (!question.region) continue;
-    const p = await getPage(question.region.pageNumber);
-    const png = cropToPng(p, question.region.bbox, scale);
-    fs.writeFileSync(path.join(outDir, "questions", `${question.id}.png`), png);
-    cropped++;
+    if (!question.regions || question.regions.length === 0) continue;
+    if (question.regions.length > 1) multiRegionCount++;
+    cropped += await cropRegions(question.id, question.regions, path.join(outDir, "questions"));
   }
-  console.log(`Cropped ${cropped} images into ${outDir}`);
+  console.log(
+    `Cropped ${cropped} images into ${outDir} (${multiRegionCount} items spanned a column/page boundary and got multiple segments)`
+  );
 
   let bank: QuestionBank = { generatedAt: new Date().toISOString(), passages: [], questions: [] };
   if (fs.existsSync(BANK_PATH)) {

@@ -4,10 +4,12 @@ import type { PositionedLine } from "@/lib/parse/pdf-columns";
 // Heuristic text segmenter for 평가원 기출/모의고사 compilation PDFs.
 //
 // Operates on PositionedLine[] (see pdf-columns.ts) rather than plain text:
-// each line carries its PDF-space bounding box, so as passages/questions are
-// assembled we also union those boxes into a crop region (ImageRegion) —
-// letting the generator show the *original* page image instead of
-// re-typeset text.
+// each line carries its PDF-space bounding box and which column/page it came
+// from, so as passages/questions are assembled we build up a list of crop
+// regions (ImageRegion[]) — one contiguous box per column/page the item
+// touches. A passage that starts at the bottom of the left column and
+// continues at the top of the right column (or spills onto a later page)
+// ends up with two-or-more regions instead of losing the overflow.
 
 const CIRCLED = ["①", "②", "③", "④", "⑤"] as const;
 
@@ -60,21 +62,25 @@ function nextId(prefix: string): string {
   return `${prefix}-${Date.now().toString(36)}-${idCounter.toString(36)}`;
 }
 
-function unionRegion(region: ImageRegion | undefined, line: PositionedLine): ImageRegion {
-  if (!region || region.pageNumber !== line.pageNumber) {
-    // Passage/question crossing a page break: keep the first page's box
-    // rather than corrupting it with coordinates from a different page.
-    return region ?? { pageNumber: line.pageNumber, bbox: { ...line.bbox } };
+/**
+ * Extends a running list of crop regions with one more line. Starts a new
+ * region whenever the line's (page, column) differs from the last one —
+ * this is what lets a passage/question that spans a column or page
+ * boundary end up with multiple regions instead of silently dropping the
+ * overflow. Returns the new "last key" to pass into the next call.
+ */
+function extendRegions(regions: ImageRegion[], lastKey: string | null, line: PositionedLine): string {
+  const key = `${line.pageNumber}:${line.column}`;
+  if (lastKey !== key) {
+    regions.push({ pageNumber: line.pageNumber, bbox: { ...line.bbox } });
+    return key;
   }
-  return {
-    pageNumber: region.pageNumber,
-    bbox: {
-      x0: Math.min(region.bbox.x0, line.bbox.x0),
-      x1: Math.max(region.bbox.x1, line.bbox.x1),
-      y0: Math.min(region.bbox.y0, line.bbox.y0),
-      y1: Math.max(region.bbox.y1, line.bbox.y1),
-    },
-  };
+  const region = regions[regions.length - 1];
+  region.bbox.x0 = Math.min(region.bbox.x0, line.bbox.x0);
+  region.bbox.x1 = Math.max(region.bbox.x1, line.bbox.x1);
+  region.bbox.y0 = Math.min(region.bbox.y0, line.bbox.y0);
+  region.bbox.y1 = Math.max(region.bbox.y1, line.bbox.y1);
+  return key;
 }
 
 /** See flushQuestion(): recovers choices printed as "…text…①" (trailing marker). */
@@ -106,7 +112,9 @@ export function segment(positionedLines: PositionedLine[], opts: SegmentOptions)
   };
 
   let currentPassage: Passage | null = null;
+  let currentPassageKey: string | null = null;
   let currentQuestion: Question | null = null;
+  let currentQuestionKey: string | null = null;
   let mode: "scan" | "passage-body" | "question-stem" | "choices" = "scan";
 
   const flushQuestion = () => {
@@ -126,6 +134,7 @@ export function segment(positionedLines: PositionedLine[], opts: SegmentOptions)
       unmatched.push(`[dropped incomplete question #${currentQuestion.originalNo}] ${currentQuestion.stem}`);
     }
     currentQuestion = null;
+    currentQuestionKey = null;
   };
 
   const flushPassage = () => {
@@ -134,6 +143,7 @@ export function segment(positionedLines: PositionedLine[], opts: SegmentOptions)
       passages.push(currentPassage);
     }
     currentPassage = null;
+    currentPassageKey = null;
   };
 
   for (const line of lines) {
@@ -169,8 +179,9 @@ export function segment(positionedLines: PositionedLine[], opts: SegmentOptions)
         questionRange: [Number(rangeMatch[1]), Number(rangeMatch[2])],
         sourceFileId: opts.sourceFileId,
         sourceFileName: opts.sourceFileName,
-        region: { pageNumber: line.pageNumber, bbox: { ...line.bbox } },
+        regions: [],
       };
+      currentPassageKey = extendRegions(currentPassage.regions!, null, line);
       mode = "passage-body";
       continue;
     }
@@ -192,9 +203,10 @@ export function segment(positionedLines: PositionedLine[], opts: SegmentOptions)
           stem: questionMatch[2],
           choices: [],
           answer: 1, // placeholder — filled in by applyAnswerKey()
-          region: { pageNumber: line.pageNumber, bbox: { ...line.bbox } },
+          regions: [],
           numberMaskWidth: line.contentX0 !== undefined ? line.contentX0 - line.bbox.x0 : undefined,
         };
+        currentQuestionKey = extendRegions(currentQuestion.regions!, null, line);
         mode = "question-stem";
         continue;
       }
@@ -211,7 +223,7 @@ export function segment(positionedLines: PositionedLine[], opts: SegmentOptions)
           currentQuestion.choices.push({ no: (idx + 1) as 1 | 2 | 3 | 4 | 5, text: choiceText });
         }
       }
-      currentQuestion.region = unionRegion(currentQuestion.region, line);
+      currentQuestionKey = extendRegions(currentQuestion.regions!, currentQuestionKey, line);
       mode = "choices";
       continue;
     }
@@ -226,7 +238,7 @@ export function segment(positionedLines: PositionedLine[], opts: SegmentOptions)
 
     if (mode === "passage-body" && currentPassage) {
       currentPassage.paragraphs.push(text);
-      currentPassage.region = unionRegion(currentPassage.region, line);
+      currentPassageKey = extendRegions(currentPassage.regions!, currentPassageKey, line);
       continue;
     }
 
@@ -238,7 +250,7 @@ export function segment(positionedLines: PositionedLine[], opts: SegmentOptions)
         const last = currentQuestion.choices[currentQuestion.choices.length - 1];
         last.text += ` ${text}`;
       }
-      currentQuestion.region = unionRegion(currentQuestion.region, line);
+      currentQuestionKey = extendRegions(currentQuestion.regions!, currentQuestionKey, line);
       continue;
     }
 

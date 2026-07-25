@@ -29,22 +29,30 @@ function A4Page({ label, children }: { label: string; children: ReactNode }) {
 }
 
 function QuestionBlock({ q }: { q: AssembledQuestion }) {
-  const imageUrl = q.region?.imageUrl;
-  if (imageUrl) {
-    const regionWidth = q.region!.bbox.x1 - q.region!.bbox.x0;
+  const regions = q.regions?.filter((r) => r.imageUrl) ?? [];
+  if (regions.length > 0) {
+    const first = regions[0];
+    const regionWidth = first.bbox.x1 - first.bbox.x0;
     const maskPercent = q.numberMaskWidth ? Math.min(40, (q.numberMaskWidth / regionWidth) * 100) : 0;
     return (
-      <div className="question-block mb-6 relative">
-        {maskPercent > 0 && (
-          <div
-            className="absolute top-0 left-0 bg-white flex items-start justify-start pl-0.5"
-            style={{ width: `${maskPercent}%`, height: "1.5em" }}
-          >
-            <span className="font-semibold text-[15px]">{q.displayNo}.</span>
-          </div>
-        )}
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src={imageUrl} alt={`문항 ${q.displayNo}`} className="w-full" />
+      <div className="question-block mb-6">
+        {/* 번호는 첫 구간에만 붙는다 — 이후 구간은 컬럼/페이지 경계를 넘어간 연속분 */}
+        <div className="relative">
+          {maskPercent > 0 && (
+            <div
+              className="absolute top-0 left-0 bg-white flex items-start justify-start pl-0.5"
+              style={{ width: `${maskPercent}%`, height: "1.5em" }}
+            >
+              <span className="font-semibold text-[15px]">{q.displayNo}.</span>
+            </div>
+          )}
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src={first.imageUrl} alt={`문항 ${q.displayNo}`} className="w-full" />
+        </div>
+        {regions.slice(1).map((r, i) => (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img key={i} src={r.imageUrl} alt={`문항 ${q.displayNo} (계속)`} className="w-full mt-1" />
+        ))}
       </div>
     );
   }
@@ -71,7 +79,7 @@ export default function PaperView({ paper }: { paper: AssembledPaper }) {
   return (
     <div id="paper-print">
       {paper.passages.map((passage, i) => {
-        const passageImageUrl = passage.region?.imageUrl;
+        const passageRegions = passage.regions?.filter((r) => r.imageUrl) ?? [];
         return (
           <div key={passage.id}>
             {/* 홀수 페이지: 지문 (좌단), 우단은 항상 비워 둠 */}
@@ -87,9 +95,16 @@ export default function PaperView({ paper }: { paper: AssembledPaper }) {
               {passage.source.label && (
                 <p className="text-[11px] text-gray-400 mb-2">{passage.source.label}</p>
               )}
-              {passageImageUrl ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img src={passageImageUrl} alt={passage.title ?? "지문"} className="w-full" />
+              {passageRegions.length > 0 ? (
+                passageRegions.map((r, ri) => (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    key={ri}
+                    src={r.imageUrl}
+                    alt={passage.title ?? "지문"}
+                    className={ri > 0 ? "w-full mt-1" : "w-full"}
+                  />
+                ))
               ) : passage.paragraphs.length > 0 ? (
                 <div className="text-[14px] leading-8 border border-gray-300 rounded p-6 bg-gray-50">
                   {passage.paragraphs.map((p, pi) => (

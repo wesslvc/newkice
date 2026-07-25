@@ -61,10 +61,14 @@ export interface Question {
   points?: number;
   difficulty?: "상" | "중" | "하";
   tags?: string[];
-  /** Crop region for the original-image rendering of this question (stem + choices, including the original number label). */
-  region?: ImageRegion;
   /**
-   * Width (in PDF points, from the region's left edge) of the original
+   * Crop region(s) for the original-image rendering of this question (stem +
+   * choices, including the original number label). More than one entry when
+   * the question spans a column or page boundary — render them in order.
+   */
+  regions?: ImageRegion[];
+  /**
+   * Width (in PDF points, from the first region's left edge) of the original
    * "12." number label at the start of the first line — wide enough for
    * the generator to paint over it and draw a freshly assigned number on
    * top, without needing to re-typeset the whole question.
@@ -83,8 +87,12 @@ export interface Passage {
   /** Reference back to the source file this was ingested from, if known. */
   sourceFileId?: string;
   sourceFileName?: string;
-  /** Crop region for the original-image rendering of this passage. */
-  region?: ImageRegion;
+  /**
+   * Crop region(s) for the original-image rendering of this passage. More
+   * than one entry when the passage spans a column or page boundary —
+   * render them in order.
+   */
+  regions?: ImageRegion[];
 }
 
 export interface QuestionBank {

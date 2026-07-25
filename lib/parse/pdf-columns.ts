@@ -25,6 +25,13 @@ export interface PositionedLine {
    * region (so a freshly-rendered number can be overlaid instead).
    */
   contentX0?: number;
+  /**
+   * Which column this line came from, when the page has a detected 2-column
+   * gutter ("single" if the page wasn't split). segment.ts uses this to
+   * detect when a passage/question crosses a column or page boundary, so it
+   * can crop each side separately instead of losing the overflow.
+   */
+  column: "left" | "right" | "single";
 }
 
 export interface ReflowedPage {
@@ -71,7 +78,12 @@ function findColumnGutter(items: PositionedItem[], pageWidth: number): number | 
   return bestGap > pageWidth * 0.015 ? bestMid : null;
 }
 
-function groupIntoLines(items: PositionedItem[], pageNumber: number, yTolerance = 3): PositionedLine[] {
+function groupIntoLines(
+  items: PositionedItem[],
+  pageNumber: number,
+  column: "left" | "right" | "single",
+  yTolerance = 3
+): PositionedLine[] {
   const sorted = [...items].sort((a, b) => b.y - a.y || a.x - b.x);
   const lines: { y: number; items: PositionedItem[] }[] = [];
   for (const item of sorted) {
@@ -112,6 +124,7 @@ function groupIntoLines(items: PositionedItem[], pageNumber: number, yTolerance 
       text,
       bbox: { x0, x1, y0, y1 },
       contentX0,
+      column,
     };
   });
 }
@@ -152,10 +165,10 @@ export async function extractReflowedPages(filePath: string): Promise<ReflowedPa
     const lines =
       gutter !== null
         ? [
-            ...groupIntoLines(items.filter((i) => i.x < gutter), pageNum),
-            ...groupIntoLines(items.filter((i) => i.x >= gutter), pageNum),
+            ...groupIntoLines(items.filter((i) => i.x < gutter), pageNum, "left"),
+            ...groupIntoLines(items.filter((i) => i.x >= gutter), pageNum, "right"),
           ]
-        : groupIntoLines(items, pageNum);
+        : groupIntoLines(items, pageNum, "single");
 
     pages.push({
       pageNumber: pageNum,

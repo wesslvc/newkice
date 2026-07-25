@@ -1,19 +1,29 @@
 #!/usr/bin/env tsx
 /**
  * Uploads every cropped passage/question image under samples/crops/ to
- * Vercel Blob, and fills in region.imageUrl on the matching bank.json
- * entries.
+ * Vercel Blob, and fills in imageUrl on the matching bank.json region(s).
+ * A passage/question that spans a column or page boundary has multiple
+ * regions — files are named "<id>.png" (first) and "<id>__N.png" (rest).
  *
  * Usage:
  *   BLOB_READ_WRITE_TOKEN=vercel_blob_rw_... npm run upload-images
+ *
+ * NOTE: Vercel Blob's endpoint may not be reachable from every environment
+ * (e.g. a sandboxed CI runner with an egress allowlist) — if `put()` fails
+ * immediately with a network error, see scripts/assign-github-image-urls.ts
+ * for an alternative that hosts images in the repo itself instead.
  */
 import fs from "fs";
 import path from "path";
 import { put } from "@vercel/blob";
-import type { QuestionBank } from "../lib/types";
+import type { ImageRegion, QuestionBank } from "../lib/types";
 
 const BANK_PATH = path.join(process.cwd(), "data", "bank.json");
 const CROPS_DIR = path.join(process.cwd(), "samples", "crops");
+
+function regionFilename(id: string, index: number): string {
+  return index === 0 ? `${id}.png` : `${id}__${index}.png`;
+}
 
 async function main() {
   const token = process.env.BLOB_READ_WRITE_TOKEN;
@@ -24,7 +34,8 @@ async function main() {
 
   const bank: QuestionBank = JSON.parse(fs.readFileSync(BANK_PATH, "utf-8"));
 
-  // Build id -> local crop file path by scanning every source-file subfolder.
+  // Build "<id>.png" / "<id>__N.png" -> local file path by scanning every
+  // source-file subfolder under samples/crops/.
   const passageFiles = new Map<string, string>();
   const questionFiles = new Map<string, string>();
   for (const sourceDir of fs.readdirSync(CROPS_DIR)) {
@@ -46,48 +57,38 @@ async function main() {
   let skipped = 0;
   let missing = 0;
 
-  for (const passage of bank.passages) {
-    if (passage.region?.imageUrl) {
-      skipped++;
-      continue;
+  async function uploadRegions(id: string, regions: ImageRegion[] | undefined, fileMap: Map<string, string>, prefix: string) {
+    if (!regions) return;
+    for (let i = 0; i < regions.length; i++) {
+      const region = regions[i];
+      if (region.imageUrl) {
+        skipped++;
+        continue;
+      }
+      const key = regionFilename(id, i).replace(/\.png$/, "");
+      const filePath = fileMap.get(key);
+      if (!filePath) {
+        missing++;
+        continue;
+      }
+      const buffer = fs.readFileSync(filePath);
+      const blob = await put(`${prefix}/${regionFilename(id, i)}`, buffer, {
+        access: "public",
+        token,
+        contentType: "image/png",
+        addRandomSuffix: false,
+      });
+      region.imageUrl = blob.url;
+      uploaded++;
+      if (uploaded % 25 === 0) console.log(`...${uploaded} uploaded`);
     }
-    const filePath = passageFiles.get(passage.id);
-    if (!filePath) {
-      missing++;
-      continue;
-    }
-    const buffer = fs.readFileSync(filePath);
-    const blob = await put(`passages/${passage.id}.png`, buffer, {
-      access: "public",
-      token,
-      contentType: "image/png",
-      addRandomSuffix: false,
-    });
-    passage.region = { ...passage.region!, imageUrl: blob.url };
-    uploaded++;
-    if (uploaded % 25 === 0) console.log(`...${uploaded} uploaded`);
   }
 
+  for (const passage of bank.passages) {
+    await uploadRegions(passage.id, passage.regions, passageFiles, "passages");
+  }
   for (const question of bank.questions) {
-    if (question.region?.imageUrl) {
-      skipped++;
-      continue;
-    }
-    const filePath = questionFiles.get(question.id);
-    if (!filePath) {
-      missing++;
-      continue;
-    }
-    const buffer = fs.readFileSync(filePath);
-    const blob = await put(`questions/${question.id}.png`, buffer, {
-      access: "public",
-      token,
-      contentType: "image/png",
-      addRandomSuffix: false,
-    });
-    question.region = { ...question.region!, imageUrl: blob.url };
-    uploaded++;
-    if (uploaded % 25 === 0) console.log(`...${uploaded} uploaded`);
+    await uploadRegions(question.id, question.regions, questionFiles, "questions");
   }
 
   fs.writeFileSync(BANK_PATH, JSON.stringify(bank, null, 2));
