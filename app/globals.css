@@ -1,0 +1,45 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-gray-50 text-gray-900 antialiased;
+  }
+}
+
+/* Screen-only paper preview chrome */
+.paper-page {
+  @apply bg-white shadow-sm rounded-lg mb-8;
+}
+
+.paper-columns {
+  column-count: 2;
+  column-gap: 2.5rem;
+}
+
+.passage-block,
+.question-block {
+  break-inside: avoid;
+}
+
+@media print {
+  .no-print {
+    display: none !important;
+  }
+  body {
+    background: white;
+  }
+  .paper-page {
+    box-shadow: none;
+    border-radius: 0;
+    margin: 0;
+  }
+  .answer-page {
+    break-before: page;
+  }
+  @page {
+    size: A4;
+    margin: 15mm;
+  }
+}
